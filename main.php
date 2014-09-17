@@ -92,124 +92,124 @@ $lambda = 10;
 	//exit;
 //}
 
-
-//Generate the keys of the destination D
-$keys_D = ElG_KeyGen($lambda, $r);
-if($keys_D == false) {
-	echo "Error : Key Generation failed for D with lambda = $lambda and r = $r...\n";
-	exit;
-}
-list($pk_D, $sk_D) = array_values($keys_D);
-$group = $pk_D["group"];
-$q = $group["order"];
-
-
-echo "Keys generated. Group is of order q = $q, generator is g = ",$group["gen"]," and p = ",$group["modulo"],"\n\n"; 
-
-$limit = 1000; //Number of tests to perform
-$echo_when_OK = false; //Print every tests on stdout
-
-//Main loop
-for($i = 0; $i < $limit; $i++) {
-	echo "Progression : $i/$limit\n";
-
-	$dst_D = rand(2, $group["modulo"]-1);
-	$ID_D = $group["G"][array_rand($group["G"])];
-	$src_P = $group["G"][array_rand($group["G"])];
-	
-	//Simulation : computation in the clear
-	$LocalID_DP_theoretic = modular_mult($ID_D, modular_exp($group["gen"], $dst_D*$src_P, $group["modulo"]), $group["modulo"]);
-
-
-	/* Protocol for route proposition. D is the destination. P is the proposee.
-	 * D -> P : HEnc_{PK_D}(g^{dst_D})
-	 * P -> D : HEnc_{PK_D}(r.g^{dst_D.src_P}) 
-	 * D -> P : r*ID_D.g^{dst_D.src_P} = r*LocalID_D^P
-	 *       Then P divides by r
-	 */
-	if($PROP_ROUTE) {
-		$time_aux = microtime(true);
-		//Done by D
-		$gpowdstD = modular_exp($group["gen"], $dst_D, $group["modulo"]);
-		$cgpowdstD = ElG_Enc($gpowdstD, $pk_D);
-
-		//Done by P
-		$r_tmp = $group["G"][array_rand($group["G"])];
-		$cgpowdstDsrcP = ElG_ScalarExp($cgpowdstD, $src_P, $pk_D);
-		$cgpowdstDsrcP = ElG_PlainMult($cgpowdstDsrcP, $r_tmp, $pk_D);
-		$cgpowdstDsrcP = ElG_Rerand($cgpowdstDsrcP, $pk_D);
-
-		//Done by D
-		$gpowdstDsrcP = ElG_Dec($cgpowdstDsrcP, $pk_D, $sk_D);
-		$rtmpLocalID_DP = modular_mult($ID_D, $gpowdstDsrcP, $group["modulo"]);
-
-		//Done by P
-		$LocalID_DP = modular_mult($rtmpLocalID_DP, modular_inverse($r_tmp, $group["modulo"]), $group["modulo"]);
-
-		$total_time_prop_route += microtime(true) - $time_aux;
-
-		if($LocalID_DP != $LocalID_DP_theoretic) {
-			echo "Error in route proposition: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_P = $src_P, r_tmp = $r_tmp, we have $LocalID_DP != $LocalID_DP_theoretic\n";
-			exit;
-		} elseif($echo_when_OK) {
-			echo "Route proposition test #$i OK: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_P = $src_P, r_tmp = $r_tmp, we have $LocalID_DP = $LocalID_DP_theoretic\n";
-		}
-	}
-	
-	/* Protocol for route initialization, between source S and auxiliary V, towards destination D
-	 * S -> V : THEnc_{PK_*}(dst_D.r)
-	 *        S et V perform a 1 round threshold decryption and V obtains dst_D.r 
-	 * V -> S : HEnc_{PK_V}(g^{dst_D.r.src_V})
-	 * S -> V : HEnc_{PK_V}(ID_D.g^{dst_D.src_V}) = HEnc(LocalID_DV)
-	 */
-	if($INIT_ROUTE) {
-		//Note: now P takes the place of V, so V = P in the following
-		$src_V = $src_P;
-
-
-		//Simulation of the threshold homomorphic part of the protocol
-		do {
-			$r_tmp = $group["G"][array_rand($group["G"])];
-		} while(gcd($r_tmp, $group["modulo"]-1) != 1);
-		$trap = $r_tmp*$dst_D;
-
-		//Done by V (key generation is considered as done offline, prior to network setup)
-		$keys_V = ElG_KeyGen_alt($r, $q);
-		if($keys_V == false) {
-			echo "Error: Key Generation failed for V with lambda = $lambda and r = $r...\n";
-			exit;
-		}
-		list($pk_V, $sk_V) = array_values($keys_V);
-		
-		$time_aux = microtime(true);
-
-		$gpowdstDrtmpsrcV = modular_exp($group["gen"], modular_mult($trap, $src_V, $group["modulo"]-1), $group["modulo"]);
-		$cgpowdstDrtmpsrcV = ElG_Enc($gpowdstDrtmpsrcV, $pk_V);
-
-		//Done by S
-		$inv_rtmp_pmin1 = modular_inverse($r_tmp, $group["modulo"]-1);
-		$cgpowdstDsrcV = ElG_ScalarExp($cgpowdstDrtmpsrcV, $inv_rtmp_pmin1, $pk_V);
-		$cLocalID_DV = ElG_PlainMult($cgpowdstDsrcV, $ID_D, $pk_V);
-		$cLocalID_DV = ElG_Rerand($cLocalID_DV, $pk_V);
-
-		//Done by V
-		$LocalID_DV = ElG_Dec($cLocalID_DV, $pk_V, $sk_V);
-
-		$total_time_init_route += microtime(true)-$time_aux;
-
-		//Because V = P, we should have that the LocalID_DV found be equal to LocalID_DP_theoretic from above
-		if($LocalID_DV != $LocalID_DP_theoretic) {
-			echo "Error in route initialization: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_V = $src_V, r_tmp = $r_tmp, we have $LocalID_DV != $LocalID_DP_theoretic\n";
-			exit;
-		} elseif($echo_when_OK) {
-			echo "Route initialization test #$i OK: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_V = $src_V, r_tmp = $r_tmp,we have $LocalID_DV = $LocalID_DP_theoretic\n";
-		}
-	}
-	if($echo_when_OK)
-		wait_CLI();
-}
-
 if($PROP_ROUTE || $INIT_ROUTE) {
+
+	//Generate the keys of the destination D
+	$keys_D = ElG_KeyGen($lambda, $r);
+	if($keys_D == false) {
+		echo "Error : Key Generation failed for D with lambda = $lambda and r = $r...\n";
+		exit;
+	}
+	list($pk_D, $sk_D) = array_values($keys_D);
+	$group = $pk_D["group"];
+	$q = $group["order"];
+
+
+	echo "Keys generated. Group is of order q = $q, generator is g = ",$group["gen"]," and p = ",$group["modulo"],"\n\n"; 
+
+	$limit = 1000; //Number of tests to perform
+	$echo_when_OK = false; //Print every tests on stdout
+
+	echo "Simulating $limit route propositions/initializations... This may take some time..."; 
+
+	//Main loop
+	for($i = 0; $i < $limit; $i++) {
+		$dst_D = rand(2, $group["modulo"]-1);
+		$ID_D = $group["G"][array_rand($group["G"])];
+		$src_P = $group["G"][array_rand($group["G"])];
+
+		//Simulation : computation in the clear
+		$LocalID_DP_theoretic = modular_mult($ID_D, modular_exp($group["gen"], $dst_D*$src_P, $group["modulo"]), $group["modulo"]);
+
+
+		/* Protocol for route proposition. D is the destination. P is the proposee.
+		 * D -> P : HEnc_{PK_D}(g^{dst_D})
+		 * P -> D : HEnc_{PK_D}(r.g^{dst_D.src_P}) 
+		 * D -> P : r*ID_D.g^{dst_D.src_P} = r*LocalID_D^P
+		 *       Then P divides by r
+		 */
+		if($PROP_ROUTE) {
+			$time_aux = microtime(true);
+			//Done by D
+			$gpowdstD = modular_exp($group["gen"], $dst_D, $group["modulo"]);
+			$cgpowdstD = ElG_Enc($gpowdstD, $pk_D);
+
+			//Done by P
+			$r_tmp = $group["G"][array_rand($group["G"])];
+			$cgpowdstDsrcP = ElG_ScalarExp($cgpowdstD, $src_P, $pk_D);
+			$cgpowdstDsrcP = ElG_PlainMult($cgpowdstDsrcP, $r_tmp, $pk_D);
+			$cgpowdstDsrcP = ElG_Rerand($cgpowdstDsrcP, $pk_D);
+
+			//Done by D
+			$gpowdstDsrcP = ElG_Dec($cgpowdstDsrcP, $pk_D, $sk_D);
+			$rtmpLocalID_DP = modular_mult($ID_D, $gpowdstDsrcP, $group["modulo"]);
+
+			//Done by P
+			$LocalID_DP = modular_mult($rtmpLocalID_DP, modular_inverse($r_tmp, $group["modulo"]), $group["modulo"]);
+
+			$total_time_prop_route += microtime(true) - $time_aux;
+
+			if($LocalID_DP != $LocalID_DP_theoretic) {
+				echo "Error in route proposition: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_P = $src_P, r_tmp = $r_tmp, we have $LocalID_DP != $LocalID_DP_theoretic\n";
+				exit;
+			} elseif($echo_when_OK) {
+				echo "Route proposition test #$i OK: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_P = $src_P, r_tmp = $r_tmp, we have $LocalID_DP = $LocalID_DP_theoretic\n";
+			}
+		}
+
+		/* Protocol for route initialization, between source S and auxiliary V, towards destination D
+		 * S -> V : THEnc_{PK_*}(dst_D.r)
+		 *        S et V perform a 1 round threshold decryption and V obtains dst_D.r 
+		 * V -> S : HEnc_{PK_V}(g^{dst_D.r.src_V})
+		 * S -> V : HEnc_{PK_V}(ID_D.g^{dst_D.src_V}) = HEnc(LocalID_DV)
+		 */
+		if($INIT_ROUTE) {
+			//Note: now P takes the place of V, so V = P in the following
+			$src_V = $src_P;
+
+
+			//Simulation of the threshold homomorphic part of the protocol
+			do {
+				$r_tmp = $group["G"][array_rand($group["G"])];
+			} while(gcd($r_tmp, $group["modulo"]-1) != 1);
+			$trap = $r_tmp*$dst_D;
+
+			//Done by V (key generation is considered as done offline, prior to network setup)
+			$keys_V = ElG_KeyGen_alt($r, $q);
+			if($keys_V == false) {
+				echo "Error: Key Generation failed for V with lambda = $lambda and r = $r...\n";
+				exit;
+			}
+			list($pk_V, $sk_V) = array_values($keys_V);
+
+			$time_aux = microtime(true);
+
+			$gpowdstDrtmpsrcV = modular_exp($group["gen"], modular_mult($trap, $src_V, $group["modulo"]-1), $group["modulo"]);
+			$cgpowdstDrtmpsrcV = ElG_Enc($gpowdstDrtmpsrcV, $pk_V);
+
+			//Done by S
+			$inv_rtmp_pmin1 = modular_inverse($r_tmp, $group["modulo"]-1);
+			$cgpowdstDsrcV = ElG_ScalarExp($cgpowdstDrtmpsrcV, $inv_rtmp_pmin1, $pk_V);
+			$cLocalID_DV = ElG_PlainMult($cgpowdstDsrcV, $ID_D, $pk_V);
+			$cLocalID_DV = ElG_Rerand($cLocalID_DV, $pk_V);
+
+			//Done by V
+			$LocalID_DV = ElG_Dec($cLocalID_DV, $pk_V, $sk_V);
+
+			$total_time_init_route += microtime(true)-$time_aux;
+
+			//Because V = P, we should have that the LocalID_DV found be equal to LocalID_DP_theoretic from above
+			if($LocalID_DV != $LocalID_DP_theoretic) {
+				echo "Error in route initialization: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_V = $src_V, r_tmp = $r_tmp, we have $LocalID_DV != $LocalID_DP_theoretic\n";
+				exit;
+			} elseif($echo_when_OK) {
+				echo "Route initialization test #$i OK: for q = $q, p = ",$group["modulo"],", ID_D = $ID_D, s_D = $dst_D, k_V = $src_V, r_tmp = $r_tmp,we have $LocalID_DV = $LocalID_DP_theoretic\n";
+			}
+		}
+		if($echo_when_OK)
+			wait_CLI();
+	}
+
 	echo "Simulated : ";
 	if($PROP_ROUTE)
 		echo "Route proposition";
