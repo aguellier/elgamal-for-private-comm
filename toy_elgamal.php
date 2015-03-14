@@ -9,7 +9,7 @@
  * routing protocol described in the paper "Homomorphic Cryptography-based
  * Privacy-Preserving Network Communications", by Christophe Bidan, Antoine 
  * Guellier and Nicolas Prigent and available at
- * ????
+ * https://hal.inria.fr/hal-01088441v1 
  *
  * This software is governed by the CeCILL license under French law and
  * abiding by the rules of distribution of free software. You can use,
